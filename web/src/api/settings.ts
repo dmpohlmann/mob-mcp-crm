@@ -5,6 +5,26 @@
 import { apiGet, apiPost, apiPatch, apiDelete } from './client';
 import type { ApiResult, PageMeta } from './types';
 
+// ─── Notification settings ──────────────────────────────────────
+
+/** Timezone + reminder/birthday notification timing for the current user. */
+export interface NotificationSettings {
+  timezone: string;
+  birthday_reminder_time: string;
+  birthday_reminder_offsets: number[];
+  reminder_offsets: number[];
+}
+
+export function getNotificationSettings(): Promise<ApiResult<NotificationSettings>> {
+  return apiGet<NotificationSettings>('/account/settings');
+}
+
+export function updateNotificationSettings(
+  body: Partial<Pick<NotificationSettings, 'birthday_reminder_time' | 'birthday_reminder_offsets' | 'reminder_offsets'>>,
+): Promise<ApiResult<NotificationSettings>> {
+  return apiPatch<NotificationSettings>('/account/settings', body);
+}
+
 // ─── API tokens ─────────────────────────────────────────────────
 
 /** A masked API token as returned by list/create (never includes plaintext). */

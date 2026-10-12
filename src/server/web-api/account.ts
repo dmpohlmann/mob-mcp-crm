@@ -49,6 +49,31 @@ const deleteSchema = z.object({
   confirm_email: z.string().min(1, 'confirm_email is required'),
 }).strict();
 
+// Advance-notice offsets are a non-empty list of whole days (>= 0) before the
+// due date to notify. Time is 24-hour HH:MM.
+const offsetsSchema = z.array(z.number().int().min(0)).min(1, 'at least one offset is required');
+const settingsSchema = z.object({
+  reminder_offsets: offsetsSchema.optional(),
+  birthday_reminder_offsets: offsetsSchema.optional(),
+  birthday_reminder_time: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'time must be HH:MM (24-hour)').optional(),
+  timezone: z.string().min(1).optional(),
+}).strict();
+
+/** Shape returned to the Settings UI (omits internal columns). */
+function publicSettings(s: {
+  timezone: string;
+  birthday_reminder_time: string;
+  birthday_reminder_offsets: number[];
+  reminder_offsets: number[];
+}) {
+  return {
+    timezone: s.timezone,
+    birthday_reminder_time: s.birthday_reminder_time,
+    birthday_reminder_offsets: s.birthday_reminder_offsets,
+    reminder_offsets: s.reminder_offsets,
+  };
+}
+
 function parseCookie(header: string, name: string): string | null {
   const match = header.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
   return match ? decodeURIComponent(match[1]) : null;
@@ -155,6 +180,25 @@ export function createAccountRouter(deps: AccountRouterDeps): Router {
       email_change_pending: emailChangePending,
       pending_email: verification.pending_email,
     });
+  }));
+
+  // ─── Notification settings (reminder/birthday offsets + time) ──
+  router.get('/settings', asyncHandler((req, res) => {
+    requirePersistent();
+    const userId = getUserId(req);
+    sendData(res, publicSettings(settingsService.get(userId)));
+  }));
+
+  router.patch('/settings', asyncHandler((req, res) => {
+    requirePersistent();
+    const userId = getUserId(req);
+    const input = parseBody(settingsSchema, req);
+    try {
+      const updated = settingsService.update(userId, input);
+      sendData(res, publicSettings(updated));
+    } catch (err) {
+      throw new ApiError(422, 'validation_error', (err as Error).message);
+    }
   }));
 
   // ─── Resend verification email ────────────────────────────────

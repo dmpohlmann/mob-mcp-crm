@@ -135,6 +135,50 @@ describe('Account self-service API (/web/api/account)', () => {
     expect(res.status).toBe(422);
   });
 
+  it('gets notification settings with defaults', async () => {
+    server = createServer(persistent);
+    const c = await makeClient(server);
+    const res = await c.get('/web/api/account/settings');
+    expect(res.status).toBe(200);
+    const data = JSON.parse(res.body).data;
+    expect(data.reminder_offsets).toEqual([0, 7, 30]);
+    expect(data.birthday_reminder_offsets).toEqual([0, 7, 30]);
+    expect(data.birthday_reminder_time).toBe('09:00');
+  });
+
+  it('updates notification settings', async () => {
+    server = createServer(persistent);
+    const c = await makeClient(server);
+    const res = await c.mutate('PATCH', '/web/api/account/settings', {
+      reminder_offsets: [0, 14], birthday_reminder_offsets: [1], birthday_reminder_time: '08:30',
+    });
+    expect(res.status).toBe(200);
+    const data = JSON.parse(res.body).data;
+    expect(data.reminder_offsets).toEqual([0, 14]);
+    expect(data.birthday_reminder_offsets).toEqual([1]);
+    expect(data.birthday_reminder_time).toBe('08:30');
+
+    // Persisted on next GET
+    const after = JSON.parse((await c.get('/web/api/account/settings')).body).data;
+    expect(after.reminder_offsets).toEqual([0, 14]);
+  });
+
+  it('rejects invalid reminder offsets with 422', async () => {
+    server = createServer(persistent);
+    const c = await makeClient(server);
+    const empty = await c.mutate('PATCH', '/web/api/account/settings', { reminder_offsets: [] });
+    expect(empty.status).toBe(422);
+    const negative = await c.mutate('PATCH', '/web/api/account/settings', { reminder_offsets: [-1] });
+    expect(negative.status).toBe(422);
+  });
+
+  it('rejects an invalid reminder time with 422', async () => {
+    server = createServer(persistent);
+    const c = await makeClient(server);
+    const res = await c.mutate('PATCH', '/web/api/account/settings', { birthday_reminder_time: '25:00' });
+    expect(res.status).toBe(422);
+  });
+
   it('email change requires re-authentication and notifies the old address', async () => {
     server = createServer(persistent);
     const c = await makeClient(server);

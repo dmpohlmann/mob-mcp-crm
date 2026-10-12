@@ -14,6 +14,7 @@ import {
   listTokens, createToken, revokeToken,
   listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listDeliveries,
   toBool, WEBHOOK_EVENTS,
+  getNotificationSettings, updateNotificationSettings,
   type ApiToken, type ApiTokenCreated, type Webhook, type WebhookDelivery,
 } from '../api/settings';
 import {
@@ -55,6 +56,7 @@ export function Settings() {
       <div class="page-header"><h1>Settings</h1></div>
 
       <ProfileSection />
+      <NotificationsSection />
       <RelationshipTypesSection />
       <ContactMethodTypesSection />
       <TagsSection />
@@ -653,6 +655,100 @@ function ProfileSection() {
           <a href="/web/logout" class="muted" style="margin-left:0.5rem;">Log out</a>
         </div>
       </form>
+    </Card>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Notifications (reminder/birthday timing)
+// ════════════════════════════════════════════════════════════════
+
+/** Parse a comma-separated offsets string into whole non-negative days, or null if invalid. */
+function parseOffsets(text: string): number[] | null {
+  const parts = text.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  if (parts.length === 0) return null;
+  const nums = parts.map(Number);
+  if (nums.some((n) => !Number.isInteger(n) || n < 0)) return null;
+  return nums;
+}
+
+function NotificationsSection() {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reminderTime, setReminderTime] = useState('09:00');
+  const [birthdayOffsets, setBirthdayOffsets] = useState('0, 7, 30');
+  const [reminderOffsets, setReminderOffsets] = useState('0, 7, 30');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getNotificationSettings()
+      .then(({ data }) => {
+        if (cancelled || !data) return;
+        setReminderTime(data.birthday_reminder_time);
+        setBirthdayOffsets(data.birthday_reminder_offsets.join(', '));
+        setReminderOffsets(data.reminder_offsets.join(', '));
+      })
+      .catch((err) => { if (!cancelled) setLoadError(errorMessage(err, 'Failed to load settings')); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function save(e: Event) {
+    e.preventDefault();
+    if (busy) return;
+    const bOff = parseOffsets(birthdayOffsets);
+    const rOff = parseOffsets(reminderOffsets);
+    if (!bOff || !rOff) {
+      showToast('Advance notice must be a comma-separated list of whole days (0 or more), e.g. 0, 7, 30', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      const { data } = await updateNotificationSettings({
+        birthday_reminder_time: reminderTime,
+        birthday_reminder_offsets: bOff,
+        reminder_offsets: rOff,
+      });
+      if (data) {
+        setReminderTime(data.birthday_reminder_time);
+        setBirthdayOffsets(data.birthday_reminder_offsets.join(', '));
+        setReminderOffsets(data.reminder_offsets.join(', '));
+      }
+      showToast('Notification settings saved', 'success');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to save settings'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card class="section" data-testid="settings-notifications">
+      <div class="section__head"><h2>Notifications</h2></div>
+      <p class="muted">When to send birthday and reminder alerts. These apply to push notifications and use your timezone.</p>
+      {loadError && <ErrorBanner message={loadError} onDismiss={() => setLoadError(null)} />}
+      {loading ? <Spinner center /> : (
+        <form class="stack" onSubmit={save}>
+          <Field label="Reminder time" hint="Time of day alerts are sent, in your timezone (24-hour)">
+            <Input data-testid="settings-reminder-time" type="time" value={reminderTime}
+              onInput={(e) => setReminderTime((e.target as HTMLInputElement).value)} />
+          </Field>
+          <Field label="Reminder advance notice" hint="Days before a reminder's date to notify, comma-separated (e.g. 0, 7, 30)">
+            <Input data-testid="settings-reminder-offsets" value={reminderOffsets}
+              onInput={(e) => setReminderOffsets((e.target as HTMLInputElement).value)} />
+          </Field>
+          <Field label="Birthday advance notice" hint="Days before a birthday to notify, comma-separated (e.g. 0, 7, 30)">
+            <Input data-testid="settings-birthday-offsets" value={birthdayOffsets}
+              onInput={(e) => setBirthdayOffsets((e.target as HTMLInputElement).value)} />
+          </Field>
+          <div class="row">
+            <Button type="submit" disabled={busy} data-testid="settings-notifications-save">
+              {busy ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        </form>
+      )}
     </Card>
   );
 }
