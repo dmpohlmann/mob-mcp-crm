@@ -179,6 +179,83 @@ describe('Account self-service API (/web/api/account)', () => {
     expect(res.status).toBe(422);
   });
 
+  it('exposes Matrix config state but never the access token', async () => {
+    server = createServer(persistent);
+    const c = await makeClient(server);
+
+    // Fresh account: not configured, no token echoed.
+    const before = JSON.parse((await c.get('/web/api/account/settings')).body).data;
+    expect(before.matrix_configured).toBe(false);
+    expect(before).not.toHaveProperty('matrix_access_token');
+
+    const patch = await c.mutate('PATCH', '/web/api/account/settings', {
+      matrix_homeserver: 'https://matrix.example.org',
+      matrix_access_token: 'syt_super_secret',
+      matrix_room_id: '!room:example.org',
+    });
+    expect(patch.status).toBe(200);
+
+    const after = JSON.parse((await c.get('/web/api/account/settings')).body).data;
+    expect(after.matrix_configured).toBe(true);
+    expect(after.matrix_homeserver).toBe('https://matrix.example.org');
+    expect(after.matrix_room_id).toBe('!room:example.org');
+    // The token is write-only and must never be returned to the client.
+    expect(after).not.toHaveProperty('matrix_access_token');
+    expect(JSON.stringify(after)).not.toContain('syt_super_secret');
+  });
+
+  it('rejects an invalid Matrix homeserver with 422', async () => {
+    server = createServer(persistent);
+    const c = await makeClient(server);
+    const res = await c.mutate('PATCH', '/web/api/account/settings', { matrix_homeserver: 'not a url' });
+    expect(res.status).toBe(422);
+  });
+
+  it('matrix test message fails with 400 when Matrix is not configured', async () => {
+    server = createServer(persistent);
+    const c = await makeClient(server);
+    const res = await c.mutate('POST', '/web/api/account/settings/matrix/test');
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body).error.code).toBe('matrix_not_configured');
+  });
+
+  it('matrix test message posts to the configured homeserver', async () => {
+    server = createServer(persistent);
+    const c = await makeClient(server);
+
+    // Stand up a loopback "homeserver" that accepts the send.
+    const received: Array<{ method: string; url: string; auth?: string; body: string }> = [];
+    const stub = http.createServer((req, res) => {
+      let b = '';
+      req.on('data', (ch) => { b += ch; });
+      req.on('end', () => {
+        received.push({ method: req.method ?? '', url: req.url ?? '', auth: req.headers.authorization, body: b });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"event_id":"$evt"}');
+      });
+    });
+    await new Promise<void>((r) => stub.listen(0, r));
+    const port = (stub.address() as { port: number }).port;
+
+    try {
+      await c.mutate('PATCH', '/web/api/account/settings', {
+        matrix_homeserver: `http://127.0.0.1:${port}`,
+        matrix_access_token: 'syt_test',
+        matrix_room_id: '!room:local',
+      });
+      const res = await c.mutate('POST', '/web/api/account/settings/matrix/test');
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body).data.sent).toBe(true);
+
+      expect(received).toHaveLength(1);
+      expect(received[0].method).toBe('PUT');
+      expect(received[0].url).toContain('/_matrix/client/v3/rooms/');
+      expect(received[0].auth).toBe('Bearer syt_test');
+    } finally {
+      stub.close();
+    }
+  });
+
   it('email change requires re-authentication and notifies the old address', async () => {
     server = createServer(persistent);
     const c = await makeClient(server);

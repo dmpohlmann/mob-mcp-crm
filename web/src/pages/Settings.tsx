@@ -14,8 +14,8 @@ import {
   listTokens, createToken, revokeToken,
   listWebhooks, createWebhook, updateWebhook, deleteWebhook, testWebhook, listDeliveries,
   toBool, WEBHOOK_EVENTS,
-  getNotificationSettings, updateNotificationSettings,
-  type ApiToken, type ApiTokenCreated, type Webhook, type WebhookDelivery,
+  getNotificationSettings, updateNotificationSettings, sendMatrixTest,
+  type ApiToken, type ApiTokenCreated, type Webhook, type WebhookDelivery, type UpdateNotificationSettings,
 } from '../api/settings';
 import {
   changePassword, updateProfile, resendVerification,
@@ -678,16 +678,29 @@ function NotificationsSection() {
   const [reminderTime, setReminderTime] = useState('09:00');
   const [birthdayOffsets, setBirthdayOffsets] = useState('0, 7, 30');
   const [reminderOffsets, setReminderOffsets] = useState('0, 7, 30');
+  const [matrixHomeserver, setMatrixHomeserver] = useState('');
+  const [matrixRoom, setMatrixRoom] = useState('');
+  // Write-only: starts blank, left blank on save keeps the existing token.
+  const [matrixToken, setMatrixToken] = useState('');
+  const [matrixConfigured, setMatrixConfigured] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [testBusy, setTestBusy] = useState(false);
+
+  function applyData(data: { birthday_reminder_time: string; birthday_reminder_offsets: number[]; reminder_offsets: number[]; matrix_homeserver: string | null; matrix_room_id: string | null; matrix_configured: boolean }) {
+    setReminderTime(data.birthday_reminder_time);
+    setBirthdayOffsets(data.birthday_reminder_offsets.join(', '));
+    setReminderOffsets(data.reminder_offsets.join(', '));
+    setMatrixHomeserver(data.matrix_homeserver ?? '');
+    setMatrixRoom(data.matrix_room_id ?? '');
+    setMatrixConfigured(data.matrix_configured);
+  }
 
   useEffect(() => {
     let cancelled = false;
     getNotificationSettings()
       .then(({ data }) => {
         if (cancelled || !data) return;
-        setReminderTime(data.birthday_reminder_time);
-        setBirthdayOffsets(data.birthday_reminder_offsets.join(', '));
-        setReminderOffsets(data.reminder_offsets.join(', '));
+        applyData(data);
       })
       .catch((err) => { if (!cancelled) setLoadError(errorMessage(err, 'Failed to load settings')); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -705,16 +718,19 @@ function NotificationsSection() {
     }
     setBusy(true);
     try {
-      const { data } = await updateNotificationSettings({
+      const body: UpdateNotificationSettings = {
         birthday_reminder_time: reminderTime,
         birthday_reminder_offsets: bOff,
         reminder_offsets: rOff,
-      });
-      if (data) {
-        setReminderTime(data.birthday_reminder_time);
-        setBirthdayOffsets(data.birthday_reminder_offsets.join(', '));
-        setReminderOffsets(data.reminder_offsets.join(', '));
-      }
+        matrix_homeserver: matrixHomeserver.trim(),
+        matrix_room_id: matrixRoom.trim(),
+      };
+      // Only send the token when the user actually typed one; a blank field
+      // leaves the stored token untouched.
+      if (matrixToken.length > 0) body.matrix_access_token = matrixToken;
+      const { data } = await updateNotificationSettings(body);
+      if (data) applyData(data);
+      setMatrixToken('');
       showToast('Notification settings saved', 'success');
     } catch (err) {
       showToast(errorMessage(err, 'Failed to save settings'), 'error');
@@ -723,10 +739,23 @@ function NotificationsSection() {
     }
   }
 
+  async function testMatrix() {
+    if (testBusy) return;
+    setTestBusy(true);
+    try {
+      await sendMatrixTest();
+      showToast('Test message sent to Matrix', 'success');
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to send test message'), 'error');
+    } finally {
+      setTestBusy(false);
+    }
+  }
+
   return (
     <Card class="section" data-testid="settings-notifications">
       <div class="section__head"><h2>Notifications</h2></div>
-      <p class="muted">When to send birthday and reminder alerts. These apply to push notifications and use your timezone.</p>
+      <p class="muted">When to send birthday and reminder alerts. These apply to push and Matrix notifications and use your timezone.</p>
       {loadError && <ErrorBanner message={loadError} onDismiss={() => setLoadError(null)} />}
       {loading ? <Spinner center /> : (
         <form class="stack" onSubmit={save}>
@@ -742,9 +771,30 @@ function NotificationsSection() {
             <Input data-testid="settings-birthday-offsets" value={birthdayOffsets}
               onInput={(e) => setBirthdayOffsets((e.target as HTMLInputElement).value)} />
           </Field>
+
+          <div class="section__head" style="margin-top:0.5rem;"><h3>Matrix</h3></div>
+          <p class="muted">Post reminders and birthdays to a Matrix room. Use a dedicated <strong>unencrypted</strong> room (end-to-end encryption is not supported).</p>
+          <Field label="Homeserver URL" hint="e.g. https://matrix.example.org">
+            <Input data-testid="settings-matrix-homeserver" type="url" placeholder="https://matrix.example.org" value={matrixHomeserver}
+              onInput={(e) => setMatrixHomeserver((e.target as HTMLInputElement).value)} />
+          </Field>
+          <Field label="Room ID" hint="e.g. !abcdef:example.org">
+            <Input data-testid="settings-matrix-room" placeholder="!room:example.org" value={matrixRoom}
+              onInput={(e) => setMatrixRoom((e.target as HTMLInputElement).value)} />
+          </Field>
+          <Field label="Access token" hint={matrixConfigured ? 'A token is saved — leave blank to keep it, or enter a new one to replace it.' : 'A bot/user access token that can post to the room.'}>
+            <Input data-testid="settings-matrix-token" type="password" autocomplete="off"
+              placeholder={matrixConfigured ? '•••••••• (saved)' : ''} value={matrixToken}
+              onInput={(e) => setMatrixToken((e.target as HTMLInputElement).value)} />
+          </Field>
+
           <div class="row">
             <Button type="submit" disabled={busy} data-testid="settings-notifications-save">
               {busy ? 'Saving…' : 'Save'}
+            </Button>
+            <Button type="button" variant="secondary" disabled={!matrixConfigured || testBusy || busy}
+              onClick={testMatrix} data-testid="settings-matrix-test">
+              {testBusy ? 'Sending…' : 'Send test message'}
             </Button>
           </div>
         </form>

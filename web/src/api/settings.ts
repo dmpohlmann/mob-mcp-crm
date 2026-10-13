@@ -13,6 +13,20 @@ export interface NotificationSettings {
   birthday_reminder_time: string;
   birthday_reminder_offsets: number[];
   reminder_offsets: number[];
+  /** Matrix target. The access token is write-only and never returned. */
+  matrix_homeserver: string | null;
+  matrix_room_id: string | null;
+  matrix_configured: boolean;
+}
+
+/** Fields the client may send. The access token is write-only (send, never read back). */
+export interface UpdateNotificationSettings {
+  birthday_reminder_time?: string;
+  birthday_reminder_offsets?: number[];
+  reminder_offsets?: number[];
+  matrix_homeserver?: string;
+  matrix_access_token?: string;
+  matrix_room_id?: string;
 }
 
 export function getNotificationSettings(): Promise<ApiResult<NotificationSettings>> {
@@ -20,9 +34,13 @@ export function getNotificationSettings(): Promise<ApiResult<NotificationSetting
 }
 
 export function updateNotificationSettings(
-  body: Partial<Pick<NotificationSettings, 'birthday_reminder_time' | 'birthday_reminder_offsets' | 'reminder_offsets'>>,
+  body: UpdateNotificationSettings,
 ): Promise<ApiResult<NotificationSettings>> {
   return apiPatch<NotificationSettings>('/account/settings', body);
+}
+
+export function sendMatrixTest(): Promise<ApiResult<{ sent: true }>> {
+  return apiPost<{ sent: true }>('/account/settings/matrix/test');
 }
 
 // ─── API tokens ─────────────────────────────────────────────────

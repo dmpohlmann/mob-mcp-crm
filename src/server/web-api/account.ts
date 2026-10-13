@@ -6,6 +6,7 @@ import { SessionService } from '../../services/sessions.js';
 import { UserSettingsService } from '../../services/settings.js';
 import { ApiTokenService } from '../../services/api-tokens.js';
 import { EmailService, renderActionEmail, renderNoticeEmail } from '../../services/email.js';
+import { MatrixService, isMatrixConfigured } from '../../services/matrix.js';
 import {
   asyncHandler,
   sendData,
@@ -57,20 +58,39 @@ const settingsSchema = z.object({
   birthday_reminder_offsets: offsetsSchema.optional(),
   birthday_reminder_time: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, 'time must be HH:MM (24-hour)').optional(),
   timezone: z.string().min(1).optional(),
+  // Matrix notification target. An empty string clears a field; the homeserver
+  // URL is validated (and mapped to 422) by the settings service.
+  matrix_homeserver: z.string().optional(),
+  matrix_access_token: z.string().optional(),
+  matrix_room_id: z.string().optional(),
 }).strict();
 
-/** Shape returned to the Settings UI (omits internal columns). */
+/**
+ * Shape returned to the Settings UI (omits internal columns). The Matrix access
+ * token is write-only: we surface whether Matrix is configured and the
+ * non-secret homeserver/room, but never echo the token back to the client.
+ */
 function publicSettings(s: {
   timezone: string;
   birthday_reminder_time: string;
   birthday_reminder_offsets: number[];
   reminder_offsets: number[];
+  matrix_homeserver: string | null;
+  matrix_access_token: string | null;
+  matrix_room_id: string | null;
 }) {
   return {
     timezone: s.timezone,
     birthday_reminder_time: s.birthday_reminder_time,
     birthday_reminder_offsets: s.birthday_reminder_offsets,
     reminder_offsets: s.reminder_offsets,
+    matrix_homeserver: s.matrix_homeserver,
+    matrix_room_id: s.matrix_room_id,
+    matrix_configured: isMatrixConfigured({
+      homeserver: s.matrix_homeserver ?? '',
+      accessToken: s.matrix_access_token ?? '',
+      roomId: s.matrix_room_id ?? '',
+    }),
   };
 }
 
@@ -88,6 +108,7 @@ function parseCookie(header: string, name: string): string | null {
 export function createAccountRouter(deps: AccountRouterDeps): Router {
   const { accountService, sessionService, oauthService, apiTokenService, settingsService, emailService, baseUrl, cookieSecure, forgetful } = deps;
   const router = Router();
+  const matrixService = new MatrixService();
 
   const currentToken = (req: import('express').Request): string =>
     parseCookie(req.headers.cookie ?? '', 'mob_session') ?? '';
@@ -199,6 +220,29 @@ export function createAccountRouter(deps: AccountRouterDeps): Router {
     } catch (err) {
       throw new ApiError(422, 'validation_error', (err as Error).message);
     }
+  }));
+
+  // Send a test message to the configured Matrix room, so the user can confirm
+  // their homeserver/token/room before relying on it for notifications.
+  router.post('/settings/matrix/test', asyncHandler(async (req, res) => {
+    requirePersistent();
+    const userId = getUserId(req);
+    const s = settingsService.get(userId);
+    const config = {
+      homeserver: s.matrix_homeserver ?? '',
+      accessToken: s.matrix_access_token ?? '',
+      roomId: s.matrix_room_id ?? '',
+    };
+    if (!isMatrixConfigured(config)) {
+      throw new ApiError(400, 'matrix_not_configured', 'Set a homeserver, access token and room id before sending a test message');
+    }
+    const result = await matrixService.send(config, {
+      text: '🦘 Mob test message — your Matrix notifications are working.',
+    });
+    if (!result.sent) {
+      throw new ApiError(502, 'matrix_error', result.error ?? 'Failed to send Matrix message');
+    }
+    sendData(res, { sent: true });
   }));
 
   // ─── Resend verification email ────────────────────────────────
