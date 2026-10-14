@@ -778,7 +778,7 @@ function NotificationsSection() {
             <Input data-testid="settings-matrix-homeserver" type="url" placeholder="https://matrix.example.org" value={matrixHomeserver}
               onInput={(e) => setMatrixHomeserver((e.target as HTMLInputElement).value)} />
           </Field>
-          <Field label="Room ID" hint="e.g. !abcdef:example.org">
+          <Field label="Room ID" hint="Internal room ID, copied verbatim from your client (e.g. !abcdef:example.org, or a long !… hash with no server suffix for newer rooms)">
             <Input data-testid="settings-matrix-room" placeholder="!room:example.org" value={matrixRoom}
               onInput={(e) => setMatrixRoom((e.target as HTMLInputElement).value)} />
           </Field>
